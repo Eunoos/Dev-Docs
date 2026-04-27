@@ -51,12 +51,22 @@
 
 ## 설계 방향
 
+### AuthFacade - 인증 처리 퍼사드 `▶ 신규`
+
+- 위치: `cases/auth/`
+- 책임: `AuthStatusEvaluator`(상태 판정)와 `JwtService`(토큰 생성)를 조합해 인증 처리를 한 번에 수행한다.
+- 반환: `AuthResult` (토큰과 `authStatus` 포함)
+- 호출자: Usecase가 각자 작업을 처리한 직후, `AuthFacade`로 발급 조건을 평가하고 토큰을 발급하도록 위임한다.
+- UseCase는 `AuthFacade` 하나만 호출하면 상태와 토큰을 동시에 받을 수 있다.
+- `AuthStatusEvaluator`와 `JwtService`는 각자의 역할만 유지한 채 오염되지 않는다.
+
 ### AuthStatusEvaluator - 인증 상태 평가
 - 위치: services/auth/ (or cases/auth/ 공통)
 - 입력: User
 - 반환: AuthStatus enum (CONSENT_REQUIRED, PHONE_VERIFICATION_REQUIRED, COMPLETED)
 - 책임: "토큰 발급 가능 여부"를 한 곳에서 판단한다. 발급 조건이 변경되더라도 이 클래스만 수정하면 된다
-- 호출자: ConsentUseCase, PhoneVerificationUseCase, LoginUseCase 등 (각자 자기 처리를 끝낸 직후 호출)
+- 토큰 생성에는 관여하지 않는다.
+- 상태 판정만 책임진다.
 
 ### TempToken - 임시 토큰
 
@@ -73,9 +83,9 @@
  - 정식 토큰은 각 UseCase가 완료되는 시점에 AuthStatusEvaluator로 조건을 확인하고, 충족되면 그 자리에서 바로 발급된다.
 
 ### 각 인증 완료 시점에서 즉시 발급
- - 동의 처리, 전화번호 인증 각 UseCase는 자신의 처리를 끝낸 직후 AuthStatusEvaluator로 발급 조건을 평가한다. 
- - 충족되면 그 자리에서 JwtService를 통해 정식 토큰을 발급한다.
- - 토큰 생성 로직과 발급 조건 평가가 각각 한 곳에 응집되어 있어, 트리거가 여러 UseCase에 있더라도 중복 코드가 발생하지 않는다.
+ - 동의 처리, 전화번호 인증 각 UseCase는 자신의 처리를 끝낸 직후 `AuthFacade`를 호출한다.
+ - `AuthFacade`가 `AuthResult`(authStatus + 토큰)를 반환하므로 UseCase는 그 결과를 응답에 담기만 하면 된다.
+ - UseCase가 `JwtService`를 직접 호출하지 않아도 된다.
 
 발급 조건은 하나로 통일된다.
 > 전화번호 인증 완료 **AND** 모든 필수 약관 동의
@@ -99,12 +109,13 @@
 ## 이점
 
  - 신규 유저가 "가입은 시작했지만 끝낼 방법이 없는" 상태가 사라진다. 임시 토큰으로 동의와 인증을 순서대로 진행할 수 있다.
- - 동의 UseCase는 동의 처리를, 인증 UseCase는 인증 처리를 각자 책임으로 갖고, 평가(AuthStatusEvaluator)에 위임한다. 토큰 생성과 조건 평가가 한 곳에 응집되어 있다.
+ - `AuthStatusEvaluator`는 상태 판정만, `JwtService`는 토큰 생성만, `AuthFacade`는 조합만 담당한다.
+ - 각자 역할이 명확하다.
  - `authStatus` enum 덕분에 현재 가입 단계가 어디인지 서버에서 명시적으로 관리된다. 약관 업데이트로 인한 재동의 같은 케이스도 별도 처리 없이 자연스럽게 커버된다.
  - 상태 판정을 서버가 하니까 Flutter 앱은 `authStatus` 값에 따라 화면만 바꿔주면 된다.
 
 ### 단점
- - 각 UseCase가 발급 조건을 직접 알고 있다. 조건이 바뀔 경우 여러 UseCase를 수정해야 한다.
+ - 토큰 발급 트리거가 여러 UseCase에 분산되어 있어, 새로운 인증 단계가 추가될 때 해당 UseCase에도 `AuthFacade` 호출을 추가해야 한다.
 
 ---
 
@@ -116,16 +127,19 @@
 카카오 로그인
     │
     ▼
+AuthFacade 호출 → 조건 미충족
+    │
+    ▼
 임시 토큰 발급 (authStatus: CONSENT_REQUIRED)
     │
     ▼
 약관 동의 × N
-    │  조건 미충족 → authStatus: PHONE_VERIFICATION_REQUIRED
+    │  AuthFacade 호출 → 조건 미충족
     ▼
 전화번호 인증 (SMS 발송 → 코드 입력)
-    │  조건 충족 → 정식 토큰 즉시 발급
+    │  AuthFacade 호출 → 조건 충족
     ▼
-정식 토큰 발급 (authStatus: COMPLETED)
+정식 토큰 즉시 발급 (authStatus: COMPLETED)
 ```
 
 ### 정상 재로그인
@@ -134,7 +148,7 @@
 카카오 로그인
     │
     ▼
-모든 조건 즉시 충족
+AuthFacade 호출 → 조건 즉시 충족
     │
     ▼
 정식 토큰 발급 (authStatus: COMPLETED)
@@ -146,11 +160,14 @@
 카카오 로그인
     │
     ▼
+AuthFacade 호출 → 조건 미충족
+    │
+    ▼
 임시 토큰 발급 (authStatus: CONSENT_REQUIRED)
     │
     ▼
 약관 동의 × N
-    │  전화번호 인증 이미 완료 → 조건 충족 → 정식 토큰 즉시 발급
+    │  AuthFacade 호출 → 전화번호 인증 이미 완료 → 조건 충족
     ▼
-정식 토큰 발급 (authStatus: COMPLETED)
+정식 토큰 즉시 발급 (authStatus: COMPLETED)
 ```
