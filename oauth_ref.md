@@ -71,7 +71,8 @@
 ### TempToken - 임시 토큰
 
 - 카카오 인증을 통과한 신규 유저나 재동의가 필요한 기존 유저에게 **15분짜리 임시 토큰(TempToken)** 을 먼저 발급한다.
-- 카카오 로그인 직후 LoginUseCase도 AuthStatusEvaluator를 먼저 호출한다. 평가 결과가 `CONSENT_REQUIRED`나 `PHONE_VERIFICATION_REQUIRED`면 TempToken을 발급한다.
+- 카카오 로그인 직후 LoginUseCase도 AuthFacade를 호출한다. 
+- AuthFacade는 평가 결과에 따라 TempToken 또는 정식 토큰을 발급한다.
 - 그 외에는 정식 토큰을 발급한다.
 
 #### 이 토큰을 활용 가능한 상황 제한
